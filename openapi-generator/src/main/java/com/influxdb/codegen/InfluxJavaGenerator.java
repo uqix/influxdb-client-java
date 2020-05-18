@@ -30,6 +30,7 @@ import java.util.Map;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
@@ -119,6 +120,12 @@ public class InfluxJavaGenerator extends JavaClientCodegen implements CodegenCon
         String[] schemaNames = openAPI.getComponents().getSchemas().keySet().toArray(new String[0]);
         for (String schemaName : schemaNames) {
             Schema schema = openAPI.getComponents().getSchemas().get(schemaName);
+
+            if ("Pkg".equals(schemaName)) {
+                ObjectSchema os = (ObjectSchema) ((ArraySchema) schema).getItems();
+                openAPI.getComponents().getSchemas().put("Pkg", os);
+            }
+
             if (schema instanceof ComposedSchema) {
 
 
@@ -178,7 +185,7 @@ public class InfluxJavaGenerator extends JavaClientCodegen implements CodegenCon
                 pluginModel.setParent("Expression");
             }
 
-            if (modelName.equals("DeadmanCheck") || modelName.equals("ThresholdCheck")) {
+            if (modelName.equals("DeadmanCheck") || modelName.equals("ThresholdCheck") || modelName.equals("CustomCheck")) {
                 pluginModel.setParent("Check");
                 pluginModel.setParentSchema("Check");
             }
@@ -340,6 +347,27 @@ public class InfluxJavaGenerator extends JavaClientCodegen implements CodegenCon
                                 operation.allParams.get(operation.allParams.size() - 1).hasMore = true;
                                 operation.allParams.add(authorization);
                             });
+                });
+
+        // Map Dictionary response to HashMap
+        operations.stream()
+                .filter(operation -> {
+                    Schema schema = this.openAPI.getComponents().getSchemas().get(operation.returnType);
+                    return schema != null && ModelUtils.isMapSchema(schema) && (schema.getProperties() == null || schema.getProperties().isEmpty());
+                })
+                .forEach(operation -> {
+
+                    String oldReturnType = operation.returnType;
+                    operation.returnType = "HashMap<String, Object>";
+                    operation.returnBaseType = operation.returnType;
+                    operation.imports.remove(oldReturnType);
+
+                    // remove from imports
+                    List<HashMap> imports = (List<HashMap>) operationsWithModels.get("imports");
+                    IntStream.range(0, imports.size())
+                            .filter(i -> imports.get(i).get("classname").equals(oldReturnType))
+                            .findFirst()
+                            .ifPresent(imports::remove);
                 });
 
         return operationsWithModels;
@@ -593,8 +621,14 @@ public class InfluxJavaGenerator extends JavaClientCodegen implements CodegenCon
     @Override
     public String toModelName(final String name) {
         String modelName = super.toModelName(name);
-        if ("PostBucketRequestRetentionRules".equals(modelName)) {
+        if ("RetentionRule".equals(modelName)) {
             return "BucketRetentionRules";
+        }
+        if ("Resource".equals(modelName)) {
+            return "PermissionResource";
+        }
+        if ("NotificationEndpointDiscrimator".equals(modelName)) {
+            return "NotificationEndpointDiscriminator";
         }
         return modelName;
     }
