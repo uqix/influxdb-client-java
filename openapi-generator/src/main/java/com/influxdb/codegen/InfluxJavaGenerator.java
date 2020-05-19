@@ -28,6 +28,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -47,6 +48,7 @@ import io.swagger.v3.oas.models.media.MediaType;
 import io.swagger.v3.oas.models.media.ObjectSchema;
 import io.swagger.v3.oas.models.media.Schema;
 import io.swagger.v3.oas.models.media.StringSchema;
+import io.swagger.v3.oas.models.parameters.RequestBody;
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.openapitools.codegen.CodegenConfig;
@@ -262,7 +264,7 @@ public class InfluxJavaGenerator extends JavaClientCodegen implements CodegenCon
                     .filter(produce -> operation.produces.indexOf(produce) != 0)
                     .map(produce -> {
 
-                        PathItem path = openAPI.getPaths().get(StringUtils.substringAfter(operation.path, "/v2"));
+                        PathItem path = getPathItem(operation);
 
                         Operation apiOperation;
                         switch (operation.httpMethod.toLowerCase()) {
@@ -370,8 +372,99 @@ public class InfluxJavaGenerator extends JavaClientCodegen implements CodegenCon
                             .ifPresent(imports::remove);
                 });
 
+        List<CodegenOperation> operationsToAdd = Lists.newArrayList();
+
+        // for multiple type of body => duplicate operations
+        operations
+                .stream()
+                .filter(op -> op.bodyParam != null && op.bodyParam.baseName.equals("UNKNOWN_BASE_TYPE"))
+                .forEach(operation -> {
+                    PathItem pathItem = getPathItem(operation);
+                    RequestBody requestBody = pathItem.getPost().getRequestBody();
+                    Schema schema = ModelUtils.getSchemaFromRequestBody(requestBody);
+                    if (ModelUtils.isComposedSchema(schema)) {
+                        List<Schema> oneOfs = ((ComposedSchema) schema).getOneOf();
+                        if (oneOfs == null || oneOfs.isEmpty()) {
+                            return;
+                        }
+
+                        Schema firstOneOf = oneOfs.get(0);
+                        String firstModelName = ModelUtils.getSimpleRef(firstOneOf.get$ref());
+                        CodegenModel firstModel = allModels.stream()
+                                .map(it -> (CodegenModel)((HashMap) it).get("model"))
+                                .filter(it -> it.name.equals(firstModelName))
+                                .findFirst()
+                                .get();
+
+                        // use first type of param
+                        CodegenParameter firstBodyParam = operation.bodyParam;
+                        firstBodyParam.baseName = firstModel.classname;
+                        firstBodyParam.paramName = toParamName(firstModel.classname);
+                        firstBodyParam.baseType = firstModel.classname;
+                        firstBodyParam.dataType = getTypeDeclaration(firstModel.classname);
+                        setParameterExampleValue(firstBodyParam, requestBody);
+
+                        Consumer<CodegenParameter> sanitize = codegenParameter -> {
+                            codegenParameter.baseName = firstBodyParam.baseName;
+                            codegenParameter.paramName = firstBodyParam.paramName;
+                            codegenParameter.baseType = firstBodyParam.baseType;
+                            codegenParameter.dataType = firstBodyParam.dataType;
+                            codegenParameter.example = firstBodyParam.example;
+                        };
+                        operation.optionalParams.stream().filter(it -> it.isBodyParam).forEach(sanitize);
+                        operation.allParams.stream().filter(it -> it.isBodyParam).forEach(sanitize);
+
+                        // Add rest of types
+                        for (Schema nextOneOf : oneOfs.subList(1, oneOfs.size())) {
+                            String nextModelName = ModelUtils.getSimpleRef(nextOneOf.get$ref());
+                            CodegenModel nextModel = allModels.stream()
+                                    .map(it -> (CodegenModel)((HashMap) it).get("model"))
+                                    .filter(it -> it.name.equals(nextModelName))
+                                    .findFirst()
+                                    .get();
+                            
+                            List<CodegenParameter> nextAllParams = new ArrayList<>();
+
+                            String nextReturnType = nextModel.classname;
+                            CodegenOperation nextOperation = new CodegenOperation();
+                            nextOperation.baseName = nextModel.classname;
+                            nextOperation.summary = operation.summary;
+                            nextOperation.notes = operation.notes;
+                            operation.allParams.forEach(codegenParameter -> {
+                                CodegenParameter nextParam = codegenParameter.copy();
+                                if (nextParam.isBodyParam) {
+                                    nextParam.baseName = nextModel.classname;
+                                    nextParam.paramName = toParamName(nextModel.classname);
+                                    nextParam.baseType = nextModel.classname;
+                                    nextParam.dataType = getTypeDeclaration(nextModel.classname);
+                                    setParameterExampleValue(nextParam, requestBody);
+                                }
+                                nextAllParams.add(nextParam);
+                            });
+                            nextOperation.allParams = nextAllParams;
+                            nextOperation.httpMethod = operation.httpMethod;
+                            nextOperation.path = operation.path;
+                            nextOperation.returnType = operation.returnType;
+                            nextOperation.operationId = operation.operationId + nextReturnType;
+
+                            HashMap<String, String> nextTypeImport = new HashMap<>();
+                            nextTypeImport.put("import", toModelImport(nextReturnType));
+                            List<HashMap> imports = (List<HashMap>) operationsWithModels.get("imports");
+                            imports.add(nextTypeImport);
+
+                            operationsToAdd.add(nextOperation);
+                        }
+                    }
+                });
+
+        operations.addAll(operationsToAdd);
         return operationsWithModels;
 
+    }
+
+    @Override
+    protected boolean needToImport(final String type) {
+        return super.needToImport(type) && !"UNKNOWN_BASE_TYPE".equals(type);
     }
 
     @Override
@@ -732,6 +825,10 @@ public class InfluxJavaGenerator extends JavaClientCodegen implements CodegenCon
         }
 
         return keys.toArray(new String[0]);
+    }
+
+    private PathItem getPathItem(final CodegenOperation operation) {
+        return openAPI.getPaths().get(StringUtils.substringAfter(operation.path, "/v2"));
     }
 
     public class TypeAdapter {
