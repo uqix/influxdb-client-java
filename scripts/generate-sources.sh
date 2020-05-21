@@ -25,6 +25,8 @@
 
 SCRIPT_PATH="$( cd "$(dirname "$0")" ; pwd -P )"
 
+wget https://raw.githubusercontent.com/influxdata/influxdb/master/http/swagger.yml -O ${SCRIPT_PATH}/../client/src/main/resources/swagger.yml
+
 # Generate OpenAPI generator
 cd ${SCRIPT_PATH}/../openapi-generator/
 mvn clean install -DskipTests
