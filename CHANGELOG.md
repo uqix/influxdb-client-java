@@ -4,7 +4,7 @@
 1. [#223](https://github.com/influxdata/influxdb-client-java/pull/223): Exponential random backoff retry strategy
 
 ### Bug Fixes
-1. [#???](https://github.com/influxdata/influxdb-client-java/pull/???): Connection URL with custom base path
+1. [#227](https://github.com/influxdata/influxdb-client-java/pull/227): Connection URL with custom base path
 
 ## 2.2.0 [2021-04-30]
 
